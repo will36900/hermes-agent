@@ -777,8 +777,12 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
         nick = None
         if member:
             names = self.config.extra.get("group_member_names")
-            nick = str((names or {}).get(member) or "").strip() if isinstance(names, dict) else ""
-            nick = nick or member[:8]
+            names = names if isinstance(names, dict) else {}
+            # Full openid wins; the 8-char prefix is the fallback so a member can be
+            # named before their raw id is known. QQ surfaces only member_openid and
+            # the shared-session logs carry the resolved display name (never user_id),
+            # so for an unnamed newcomer the prefix is all that is ever recorded.
+            nick = str(names.get(member) or names.get(member[:8]) or "").strip() or member[:8]
         await self._ingest(
             d, msg_id, self._strip_at_mention(content), d.get("attachments"), timestamp,
             chat_id=group_openid, qq_chat_type="group", user_id=member,
