@@ -768,9 +768,21 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
         member = str(author.get("member_openid", ""))
         if not group_openid or not self._is_group_allowed(group_openid, member):
             return
+        # QQ's group event carries only member_openid — no nickname — so a shared
+        # multi-user session had no way to attribute a message and every line
+        # arrived with no speaker. Resolve a display name from
+        # platforms.<plat>.extra.group_member_names (falling back to a short id)
+        # and hand it to SessionSource.user_name; the gateway then prefixes each
+        # inbound message with [name] whenever the session is shared.
+        nick = None
+        if member:
+            names = self.config.extra.get("group_member_names")
+            nick = str((names or {}).get(member) or "").strip() if isinstance(names, dict) else ""
+            nick = nick or member[:8]
         await self._ingest(
             d, msg_id, self._strip_at_mention(content), d.get("attachments"), timestamp,
-            chat_id=group_openid, qq_chat_type="group", user_id=member, chat_type="group")
+            chat_id=group_openid, qq_chat_type="group", user_id=member,
+            user_name=nick, chat_type="group")
 
     async def _handle_guild_message(self, d, msg_id, content, author, timestamp) -> None:
         channel_id = str(d.get("channel_id", ""))
@@ -1534,6 +1546,36 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
 
     async def send_image_file(self, chat_id, image_path, caption=None, reply_to=None, **kwargs) -> SendResult:
         return await self._send_media(chat_id, image_path, MEDIA_TYPE_IMAGE, "image", caption, reply_to)
+
+    async def send_multiple_images(
+        self, chat_id: str, images: list, metadata: Optional[dict[str, Any]] = None,
+        human_delay: float = 0.0, reply_to: Optional[str] = None,
+    ) -> SendResult:
+        """Send images, threading ``reply_to`` so QQ treats them as passive replies.
+
+        QQ rejects active media messages in groups that never granted push
+        permission (``40034105 主动消息失败, 无权限``); the same image attached
+        to a passive reply is accepted, so the inbound msg id matters here."""
+        delivered = False
+        last_error: Optional[str] = None
+        for image_url, alt_text in images:
+            if human_delay > 0:
+                await asyncio.sleep(human_delay)
+            try:
+                if image_url.startswith("file://"):
+                    from urllib.request import url2pathname
+                    res = await self.send_image_file(
+                        chat_id=chat_id, image_path=url2pathname(image_url[7:]), reply_to=reply_to)
+                else:
+                    res = await self.send_image(chat_id=chat_id, image_url=image_url, reply_to=reply_to)
+                if res.success:
+                    delivered = True
+                else:
+                    last_error = res.error or "image send failed"
+            except Exception as exc:
+                last_error = str(exc) or type(exc).__name__
+                logger.warning("[%s] Image send error: %s", self._log_tag, exc)
+        return SendResult(success=delivered, error=None if delivered else (last_error or "no image delivered"))
 
     async def send_voice(self, chat_id, audio_path, caption=None, reply_to=None, **kwargs) -> SendResult:
         return await self._send_media(chat_id, audio_path, MEDIA_TYPE_VOICE, "voice", caption, reply_to)
