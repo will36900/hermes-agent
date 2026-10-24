@@ -1273,7 +1273,7 @@ class TestGroupSenderName:
     FULL = "249FD176AABBCCDDEEFF001122334455"
 
     def _adapter(self, **extra):
-        from gateway.platforms.qqbot import QQAdapter
+        from plugins.platforms.qqbot.adapter import QQAdapter
         return QQAdapter(_make_config(
             app_id="a", client_secret="b", group_policy="open", **extra))
 
